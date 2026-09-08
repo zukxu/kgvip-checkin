@@ -30,8 +30,3 @@ def print_blue(msg: object) -> None:
 def print_magenta(msg: object) -> None:
     """品红色输出，用于账号信息。"""
     _print("\x1b[35m", msg)
-
-
-def print_grey(msg: object) -> None:
-    """灰色输出，用于次要信息。"""
-    _print("\x1b[2m", msg)

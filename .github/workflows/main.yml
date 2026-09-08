@@ -49,7 +49,7 @@ jobs:
             ${{ runner.os }}-node-
 
       - name: 安装 api 依赖
-        run: cd api && npm ci
+        run: cd api && npm ci --omit=dev
         if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
 
       - name: 安装 Python 依赖
