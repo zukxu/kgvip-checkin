@@ -148,7 +148,7 @@ activemq-data/
 *.sage.py
 
 # Environments
-.env
+/.env
 .envrc
 .venv
 env/
@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+.codegraph
+
+# kgcheckin-py 登录产物（包含 token，严禁提交）
+userinfo.json
+login_qrcode.png
+
+# IDE
+.idea/
+
+# Node 依赖（api/node_modules 由 npm ci 安装，不入库）
+node_modules/
