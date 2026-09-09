@@ -1,7 +1,0 @@
-{
-  "name": "kgcheckin-py",
-  "private": true,
-  "scripts": {
-    "apiService": "cd api && npm run start"
-  }
-}

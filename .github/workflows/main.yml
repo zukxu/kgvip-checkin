@@ -21,13 +21,6 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: 创建 Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: 'npm'
-          cache-dependency-path: ./api/package-lock.json
-
       - name: 🔧 检查GitHub CLI
         run: |
           if ! command -v gh >/dev/null 2>&1; then
@@ -38,19 +31,6 @@ jobs:
             sudo apt install gh -y
           fi
           gh --version
-
-      - name: 缓存 api node_modules
-        id: cache-npm
-        uses: actions/cache@v5
-        with:
-          path: ./api/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('./api/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
-      - name: 安装 api 依赖
-        run: cd api && npm ci --omit=dev
-        if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
 
       - name: 安装 Python 依赖
         run: pip install -r requirements.txt

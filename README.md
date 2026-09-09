@@ -1,10 +1,10 @@
 # 酷狗概念版 VIP 自动签到（Python 版）
 
-由 Node.js 版 [kgcheckin](https://github.com/develop202/kgcheckin) 重构而来的 Python 版本：每日自动「听歌 + 看广告」领取青春 VIP（每日累计上限 48 小时），token 每日自动续期。
+由 Node.js 版 [kgcheckin](https://github.com/develop202/kgcheckin) 重构而来的**纯 Python** 版本：每日自动「听歌 + 看广告」领取青春 VIP（每日累计上限 48 小时），token 每日自动续期。无 Node.js 依赖，直连酷狗官方网关。
 
 ## 功能
 
-- 毺日自动签到（听歌领 VIP + 看广告领 VIP × 8）
+- 每日自动签到（听歌领 VIP + 看广告领 VIP × 8）
 - 首次运行扫码 / 手机号验证码登录，免手动配置
 - Token 每日自动续期，变更时回写本地与 GitHub Secret
 - VIP 到期时间查询、多账号支持
@@ -24,23 +24,25 @@ python main.py --login      # 手机号验证码登录
 ## GitHub Actions（推荐，全自动）
 
 1. Fork / 使用本仓库
-2. 创建 PAT：访问 https://github.com/settings/personal-access-tokens/new
+2. 本地运行 `python main.py` 完成登录，生成 `userinfo.json`
+3. 创建 PAT：访问 https://github.com/settings/personal-access-tokens/new
    - **Repository access**：只选本仓库
    - **Permissions**：`Secrets` → 读写
-3. 仓库 `Settings → Secrets and variables → Actions` 添加 Secret `PAT` = 上一步的 token
-4. Actions 页面 → `main` → `Run workflow` 手动跑一次：日志中拼接二维码链接扫码登录，`USERINFO` 自动写入
-5. 之后每天北京时间 01:10 自动签到 + 续期
+4. 仓库 `Settings → Secrets and variables → Actions` 添加两个 Secret：
+   - `PAT` = 上一步的 token
+   - `USERINFO` = 本地 `userinfo.json` 的完整内容
+5. Actions 页面 → `main` → `Run workflow` 手动验证一次
+6. 之后每天北京时间 01:10 自动签到 + 续期
 
 ## 项目结构
 
 ```
 main.py             # 主入口：登录检测、签到流程、每日 token 续期
 login.py            # 扫码 / 手机号验证码登录
-service.py          # 本地 api 服务管理（启动/等待/请求）
+kugou_api.py        # 酷狗 API 纯 Python 客户端（加密/签名/请求引擎/9 个接口）
 safe_log.py         # 日志脱敏
 github_secrets.py   # GitHub Secret 写入（gh CLI）
 color_out.py        # 彩色输出
-api/                # KuGouMusicApi 精简版（仅保留本项目所需 9 个接口）
 docs/操作文档.md     # 完整操作文档与 FAQ
 ```
 

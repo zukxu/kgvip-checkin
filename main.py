@@ -1,29 +1,30 @@
-"""酷狗概念版 VIP 自动签到主流程（转换自 Node.js 版 main.js）。
+"""酷狗概念版 VIP 自动签到主流程。
 
 智能签到：自动检测登录状态——优先读取环境变量 USERINFO（GitHub Actions），
 其次读取本地 userinfo.json，两者均无时引导扫码或手机号验证码登录；
 登录完成后立即签到。每天签到时调用续期接口刷新 token（未到期返回原值），
 发生变化时回写本地文件与 GitHub Secret。
-依赖本地 Node api 服务（npm run apiService，监听 127.0.0.1:3000）。
+接口定义与加密/签名详见 kugou_api.py（直连酷狗官方网关，无本地服务依赖）。
 """
 
 import argparse
 import json
 import os
 import pprint
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import kugou_api
 from color_out import print_blue, print_green, print_magenta, print_red, print_yellow
 from github_secrets import has_secret_write_token, set_repo_secret
 from login import login_interactive, phone_login, qrcode_login
 from safe_log import mask_display_name, mask_identifier, sanitize_for_log, should_print_sensitive_value, summarize_response
-from service import close_api, delay, send, start_service, timestamp_ms, wait_service_ready
 
 USERINFO_FILE = Path(__file__).resolve().parent / "userinfo.json"
 
 AD_CLAIM_ROUNDS = 8
-AD_CLAIM_INTERVAL_MS = 30 * 1000
+AD_CLAIM_INTERVAL_SECONDS = 30
 
 
 def now_utc8() -> datetime:
@@ -85,14 +86,9 @@ def merge_user(userinfo: list, credentials: dict) -> None:
     userinfo.append(credentials)
 
 
-def build_headers(user: dict) -> dict:
-    """构造携带身份信息的请求头。"""
-    return {"cookie": f"token={user['token']}; userid={user['userid']}"}
-
-
-def fetch_user_detail(user: dict, headers: dict, error_msg: dict) -> str:
+def fetch_user_detail(user: dict, error_msg: dict) -> str:
     """获取账号详情并返回脱敏昵称；账号无效时记录异常并返回空字符串。"""
-    detail = send(f"/user/detail?timestrap={timestamp_ms()}", "GET", headers)
+    detail = kugou_api.user_detail(user)
     nickname = ((detail or {}).get("data") or {}).get("nickname")
     if nickname is not None:
         return mask_display_name(nickname)
@@ -104,13 +100,12 @@ def fetch_user_detail(user: dict, headers: dict, error_msg: dict) -> str:
     return ""
 
 
-def refresh_token(user: dict, headers: dict, safe_nickname: str) -> bool:
+def refresh_token(user: dict, safe_nickname: str) -> bool:
     """调用续期接口刷新 token；返回 token 是否发生变化。
 
-    原版仅周日调用；改为每天签到时调用（/login/token 为幂等的
-    token 重登录，未到期时服务端返回原 token）。
+    /login/token 为幂等的 token 重登录，未到期时服务端返回原 token。
     """
-    result = send(f"/login/token?timestrap={timestamp_ms()}", "POST", headers)
+    result = kugou_api.login_token(user)
     if result.get("status") == 1:
         new_token = (result.get("data") or {}).get("token")
         if new_token and new_token != user["token"]:
@@ -120,10 +115,10 @@ def refresh_token(user: dict, headers: dict, safe_nickname: str) -> bool:
     return False
 
 
-def listen_song(headers: dict, safe_nickname: str, error_msg: dict) -> None:
+def listen_song(user: dict, safe_nickname: str, error_msg: dict) -> None:
     """听歌领取 VIP。"""
     print_yellow("开始听歌领取VIP...")
-    listen = send(f"/youth/listen/song?timestrap={timestamp_ms()}", "GET", headers)
+    listen = kugou_api.youth_listen_song(user)
 
     if listen.get("status") == 1:
         print_green("听歌领取成功")
@@ -134,16 +129,16 @@ def listen_song(headers: dict, safe_nickname: str, error_msg: dict) -> None:
         print_red("听歌领取失败")
 
 
-def claim_vip_by_ad(headers: dict, safe_nickname: str, error_msg: dict) -> None:
+def claim_vip_by_ad(user: dict, safe_nickname: str, error_msg: dict) -> None:
     """看广告领取 VIP，每日最多 8 次，两次之间等待 30 秒。"""
     print_yellow("开始领取VIP...")
     for round_no in range(1, AD_CLAIM_ROUNDS + 1):
-        ad = send(f"/youth/vip?timestrap={timestamp_ms()}", "GET", headers)
+        ad = kugou_api.youth_vip(user)
 
         if ad.get("status") == 1:
             print_green(f"第{round_no}次领取成功")
             if round_no != AD_CLAIM_ROUNDS:
-                delay(AD_CLAIM_INTERVAL_MS)
+                time.sleep(AD_CLAIM_INTERVAL_SECONDS)
         elif ad.get("error_code") == 30002:
             print_green("今天次数已用光")
             break
@@ -153,9 +148,9 @@ def claim_vip_by_ad(headers: dict, safe_nickname: str, error_msg: dict) -> None:
             break
 
 
-def show_vip_detail(headers: dict, date: str, safe_nickname: str, error_msg: dict) -> None:
+def show_vip_detail(user: dict, date: str, safe_nickname: str, error_msg: dict) -> None:
     """查询并打印 VIP 到期时间。"""
-    vip_detail = send(f"/user/vip/detail?timestrap={timestamp_ms()}", "GET", headers)
+    vip_detail = kugou_api.user_vip_detail(user)
 
     if vip_detail.get("status") == 1:
         end_time = vip_detail["data"]["busi_vip"][0]["vip_end_time"]
@@ -166,52 +161,55 @@ def show_vip_detail(headers: dict, date: str, safe_nickname: str, error_msg: dic
         error_msg[f"{safe_nickname} vip_details"] = summarize_response(vip_detail)
 
 
+def run_login(args: argparse.Namespace, userinfo: list) -> None:
+    """引导登录并把账号合并进 userinfo。"""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        raise RuntimeError(
+            "Actions 环境未配置账号信息（Secret USERINFO 为空）。"
+            "请先在本地运行 python main.py 完成登录，"
+            "再将本地 userinfo.json 的内容添加为仓库 Secret USERINFO"
+        )
+
+    if args.qrcode:
+        credentials_list = qrcode_login(args.count)
+    elif args.login:
+        credentials_list = phone_login()
+    else:
+        credentials_list = login_interactive()
+
+    for credentials in credentials_list:
+        merge_user(userinfo, credentials)
+    if not userinfo:
+        raise RuntimeError("登录未完成，无账号信息")
+    save_userinfo(userinfo)
+
+
 def main() -> None:
     args = parse_args()
     userinfo = load_userinfo() or []
-    need_login = args.qrcode or args.login or not userinfo
 
-    api = start_service()
-    try:
-        wait_service_ready()  # 等待 api 服务端口就绪
+    # 首次运行或显式指定登录参数时，先登录再签到
+    if args.qrcode or args.login or not userinfo:
+        run_login(args, userinfo)
 
-        # 首次运行或显式指定登录参数时，先登录再签到
-        if need_login:
-            if args.qrcode:
-                credentials_list = qrcode_login(args.count)
-            elif args.login:
-                credentials_list = phone_login()
-            else:
-                credentials_list = login_interactive()
+    today = now_utc8()
+    date = today.strftime("%Y-%m-%d")
 
-            for credentials in credentials_list:
-                merge_user(userinfo, credentials)
-            if not userinfo:
-                raise RuntimeError("登录未完成，无账号信息")
-            save_userinfo(userinfo)
+    error_msg: dict = {}
+    need_refresh = False
 
-        today = now_utc8()
-        date = today.strftime("%Y-%m-%d")
+    for user in userinfo:
+        safe_nickname = fetch_user_detail(user, error_msg)
+        if not safe_nickname:
+            continue
+        print_magenta(f"账号 {safe_nickname} 开始领取VIP...")
 
-        error_msg: dict = {}
-        need_refresh = False
+        if refresh_token(user, safe_nickname):
+            need_refresh = True
 
-        for user in userinfo:
-            headers = build_headers(user)
-
-            safe_nickname = fetch_user_detail(user, headers, error_msg)
-            if not safe_nickname:
-                continue
-            print_magenta(f"账号 {safe_nickname} 开始领取VIP...")
-
-            if refresh_token(user, headers, safe_nickname):
-                need_refresh = True
-
-            listen_song(headers, safe_nickname, error_msg)
-            claim_vip_by_ad(headers, safe_nickname, error_msg)
-            show_vip_detail(headers, date, safe_nickname, error_msg)
-    finally:
-        close_api(api)
+        listen_song(user, safe_nickname, error_msg)
+        claim_vip_by_ad(user, safe_nickname, error_msg)
+        show_vip_detail(user, date, safe_nickname, error_msg)
 
     # 每日续期：token 已就地更新，有变化时回写本地文件与 Secret
     if need_refresh:

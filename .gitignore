@@ -225,6 +225,3 @@ login_qrcode.png
 
 # IDE
 .idea/
-
-# Node 依赖（api/node_modules 由 npm ci 安装，不入库）
-node_modules/

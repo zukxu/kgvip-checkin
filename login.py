@@ -1,7 +1,7 @@
-"""首次登录流程：扫码 / 手机号验证码（转换自 Node.js 版 qrcodeLogin.js、phoneLogin.js、sent.js）。
+"""首次登录流程：扫码 / 手机号验证码。
 
-依赖本地 api 服务（127.0.0.1:3000）已启动。
-返回格式与 USERINFO 一致：[{"userid": ..., "token": "..."}]。
+直连酷狗登录网关（接口定义见 kugou_api.py），返回格式与 USERINFO 一致：
+[{"userid": ..., "token": "..."}]。
 """
 
 import base64
@@ -9,15 +9,15 @@ import os
 import pprint
 import subprocess
 import sys
+import time
 from pathlib import Path
-from urllib.parse import urlencode
 
+import kugou_api
 from color_out import print_green, print_magenta, print_red, print_yellow
 from safe_log import summarize_response
-from service import delay, send, timestamp_ms
 
-QR_CHECK_INTERVAL_MS = 5000
-QR_CHECK_MAX_TIMES = 25
+QR_POLL_INTERVAL_SECONDS = 5
+QR_POLL_MAX_TIMES = 25
 QR_IMAGE_FILE = Path(__file__).resolve().parent / "login_qrcode.png"
 
 
@@ -65,7 +65,7 @@ def qrcode_login(count: int = 1) -> list:
     """扫码登录 count 个账号，返回 [{"userid", "token"}] 列表。"""
     userinfo = []
     for _ in range(count):
-        result = send(f"/login/qr/key?timestrap={timestamp_ms()}", "GET", {})
+        result = kugou_api.qr_key()
         if result.get("status") != 1:
             print_red("响应内容")
             pprint.pprint(summarize_response(result))
@@ -75,9 +75,9 @@ def qrcode_login(count: int = 1) -> list:
         print_magenta("正在等待，请扫描二维码并确定登录")
 
         key = result["data"]["qrcode"]
-        for attempt in range(QR_CHECK_MAX_TIMES):
-            res = send(f"/login/qr/check?key={key}&timestrap={timestamp_ms()}", "GET", {})
-            status = (res.get("data") or {}).get("status")
+        for attempt in range(QR_POLL_MAX_TIMES):
+            res = kugou_api.qr_check(key)
+            status = ((res.get("data") or {}).get("status"))
 
             if status == 4:
                 print_green("登录成功！")
@@ -92,10 +92,10 @@ def qrcode_login(count: int = 1) -> list:
             if status not in (1, 2):  # 1 未扫描 / 2 未确认，静默等待
                 print_red("请求出错")
                 pprint.pprint(summarize_response(res))
-            if attempt == QR_CHECK_MAX_TIMES - 1:
+            if attempt == QR_POLL_MAX_TIMES - 1:
                 print_red("等待超时\n")
                 break
-            delay(QR_CHECK_INTERVAL_MS)
+            time.sleep(QR_POLL_INTERVAL_SECONDS)
 
     return userinfo
 
@@ -111,7 +111,7 @@ def phone_login() -> list:
         raise RuntimeError("未输入手机号")
 
     print("开始发送验证码")
-    result = send(f"/captcha/sent?{urlencode({'mobile': phone})}", "GET", {})
+    result = kugou_api.captcha_sent(phone)
     if result.get("status") != 1:
         print_red("响应内容")
         pprint.pprint(summarize_response(result))
@@ -122,7 +122,7 @@ def phone_login() -> list:
     if not code:
         raise RuntimeError("未输入验证码")
 
-    result = send(f"/login/cellphone?{urlencode({'mobile': phone, 'code': code})}", "GET", {})
+    result = kugou_api.login_cellphone(phone, code)
     if result.get("status") == 1:
         print_green("登录成功！")
         return [{
